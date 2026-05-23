@@ -1,27 +1,27 @@
-import { useRef, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { useRef, useState, useCallback } from 'react';
+import { StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 
 const SESSION_EXTRACTOR_SCRIPT = `
-	(function() {
-		try {
-		const sessionId =
-			localStorage.getItem('sessionid') ||
-			sessionStorage.getItem('sessionid') ||
-			window._sessionid ||
-			'';
-		window.ReactNativeWebView.postMessage(JSON.stringify({
-			type: 'sessionid',
-			value: sessionId
-		}));
-		} catch (e) {
-		window.ReactNativeWebView.postMessage(JSON.stringify({
-			type: 'error',
-			value: e.message
-		}));
-		}
-	})();
-	true; // Required by react-native-webview
+    (function() {
+        try {
+        const sessionId =
+            localStorage.getItem('sessionid') ||
+            sessionStorage.getItem('sessionid') ||
+            window._sessionid ||
+            '';
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'sessionid',
+            value: sessionId
+        }));
+        } catch (e) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'error',
+            value: e.message
+        }));
+        }
+    })();
+    true;
 `;
 
 async function searchAdrion(keywords, sessionId, categoryIds = 'wktjoucppw') {
@@ -75,7 +75,6 @@ async function searchAdrion(keywords, sessionId, categoryIds = 'wktjoucppw') {
 	if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
 	const data = await response.json();
-
 	return (data.rows ?? []).map((item) => ({
 		id: item.id,
 		title: item.name,
@@ -91,55 +90,54 @@ async function searchAdrion(keywords, sessionId, categoryIds = 'wktjoucppw') {
 	}));
 }
 
-export default function AdrionScraper({ keywords = 'dc compact', onData, onError }) {
+export default function useAdrionScraper(keywords = 'dc compact') {
 	const webViewRef = useRef(null);
+	const [data, setData] = useState([]);
 	const [status, setStatus] = useState('loading');
+	const [error, setError] = useState(null);
 
-	const handleLoad = () => webViewRef.current?.injectJavaScript(SESSION_EXTRACTOR_SCRIPT);;
+	const handleLoad = useCallback(() => {
+		webViewRef.current?.injectJavaScript(SESSION_EXTRACTOR_SCRIPT);
+	}, []);
 
-	const handleMessage = async (event) => {
+	const handleMessage = useCallback(async (event) => {
 		try {
-			const message = JSON.parse(event.nativeEvent.data);
-
-			if (message.type === 'error') {
-				throw new Error('WebView JS error: ' + message.value);
-			}
-
-			if (message.type === 'sessionid') {
-				const sessionId = message.value;
-				const results = await searchAdrion(keywords, sessionId);
-				setStatus('done');
-				onData?.(results);
-			}
-
-		} catch (err) {
-			setStatus('error');
-			onError?.(err.message);
+		const message = JSON.parse(event.nativeEvent.data);
+		if (message.type === 'error') throw new Error('WebView JS error: ' + message.value);
+		if (message.type === 'sessionid') {
+			const results = await searchAdrion(keywords, message.value);
+			setData(results);
+			setStatus('done');
 		}
-	};
-
-	const handleWebViewError = (syntheticEvent) => {
-		const { nativeEvent } = syntheticEvent;
+		} catch (err) {
+		setError(err.message);
 		setStatus('error');
-		onError?.(`WebView failed to load: ${nativeEvent.description}`);
-	};
+		}
+	}, [keywords]);
 
-	return (
-		<View>
-			{status === 'loading' && <ActivityIndicator />}
-			{status === 'error'   && <Text style={styles.error}>Scrape failed</Text>}
-			<WebView
-				ref={webViewRef}
-				source={{ uri: 'https://www.adrionltd.com/' }}
-				originWhitelist={['*']}
-				onLoad={handleLoad}
-				onMessage={handleMessage}
-				onError={handleWebViewError}
-				style={styles.hidden}
-				javaScriptEnabled={true}
-			/>
-		</View>
+	const handleWebViewError = useCallback((syntheticEvent) => {
+		const { nativeEvent } = syntheticEvent;
+		setError(`WebView failed to load: ${nativeEvent.description}`);
+		setStatus('error');
+	}, []);
+
+	const ScraperWebView = useCallback(
+		() => (
+		<WebView
+			ref={webViewRef}
+			source={{ uri: 'https://www.adrionltd.com/' }}
+			originWhitelist={['*']}
+			onLoad={handleLoad}
+			onMessage={handleMessage}
+			onError={handleWebViewError}
+			style={styles.hidden}
+			javaScriptEnabled
+		/>
+		),
+		[handleLoad, handleMessage, handleWebViewError],
 	);
+
+	return { data, status, error, ScraperWebView };
 }
 
 const styles = StyleSheet.create({
@@ -148,8 +146,5 @@ const styles = StyleSheet.create({
 		height: 0,
 		opacity: 0,
 		position: 'absolute',
-	},
-	error: {
-		color: 'red',
 	}
 });
